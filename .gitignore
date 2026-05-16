@@ -15,7 +15,9 @@ env/
 .vscode/
 *.iml
 data/
-output/
+# output/ (included per user request)
+Post.txt
+Project Critique.md
 *.log
 .DS_Store
 Thumbs.db

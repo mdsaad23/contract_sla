@@ -1,0 +1,51 @@
+================================================================
+SLA EXTRACTION PIPELINE — PHASE 4 FINAL STATS
+================================================================
+
+DATASET
+  Source         : CUAD (theatticusproject/cuad)
+  Available text : 510 contracts (1 PDF was the datasheet, skipped)
+
+PROCESSING
+  Total processed: 511
+  Status         : {'failed': 4, 'partial': 51, 'success': 456}
+  Failures logged: 4
+  Time span      : 2026-05-16 12:56:50 -> 2026-05-16 15:00:32
+
+TOKEN USAGE & COST
+  Total tokens   : 4,292,910
+  Avg per contract: 8,401
+  Cost (min)     : $1.1591
+  Cost (blended) : $1.7172
+  Cost (max)     : $4.7222
+
+PENALTY EXTRACTION INSIGHTS
+  Monetary penalty (cash): 128  (25.0%)
+  Service credits only   : 256   (50.1%)
+  No penalty clauses     : 127      (24.9%)
+
+FIELD COVERAGE
+  uptime_guarantee            19/511 (  3.7%)  #
+  response_time_sla           36/511 (  7.0%)  ##
+  sla_breach_threshold        28/511 (  5.5%)  ##
+  sla_measurement_period      21/511 (  4.1%)  #
+  penalty_uptime_breach       12/511 (  2.3%)  
+  penalty_late_delivery       33/511 (  6.5%)  ##
+  penalty_termination_fee     98/511 ( 19.2%)  #######
+  penalty_late_payment       124/511 ( 24.3%)  #########
+  penalty_data_breach         23/511 (  4.5%)  #
+  penalty_has_monetary       384/511 ( 75.1%)  ##############################
+  penalty_max_amount          82/511 ( 16.0%)  ######
+  penalty_currency            83/511 ( 16.2%)  ######
+  service_credit_cap           6/511 (  1.2%)  
+  renewal_terms              205/511 ( 40.1%)  ################
+  termination_clause         427/511 ( 83.6%)  #################################
+  liability_cap              264/511 ( 51.7%)  ####################
+  governing_law              416/511 ( 81.4%)  ################################
+  dispute_resolution         342/511 ( 66.9%)  ##########################
+
+OUTPUT FILES
+  output/results.db          :  2,437,120 bytes
+  output/results.json        :  2,395,199 bytes
+  output/results_summary.csv :    920,012 bytes
+================================================================

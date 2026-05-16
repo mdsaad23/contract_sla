@@ -1,0 +1,18 @@
+[
+  {
+    "id": "cuad_0348",
+    "error": "Unterminated string starting at: line 16 column 25 (char 2933)"
+  },
+  {
+    "id": "cuad_0412",
+    "error": "Unterminated string starting at: line 19 column 25 (char 4697)"
+  },
+  {
+    "id": "cuad_0419",
+    "error": "Unterminated string starting at: line 19 column 25 (char 5456)"
+  },
+  {
+    "id": "cuad_0485",
+    "error": "Expecting property name enclosed in double quotes: line 17 column 413 (char 1351)"
+  }
+]
