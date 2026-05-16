@@ -1,0 +1,14 @@
+llama-index
+llama-index-vector-stores-chroma
+fastembed
+onnxruntime-directml
+chromadb
+openai
+pydantic
+pypdf
+pdfplumber
+python-dotenv
+tqdm
+pandas
+pytest
+datasets
