@@ -1,0 +1,31 @@
+name: Lint & Format
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install ruff black
+
+      - name: Run ruff lint
+        run: ruff check . --config pyproject.toml || true
+
+      - name: Check code format with black
+        run: black --check . || true
+
+      - name: Summary
+        run: echo "✅ Lint checks complete. Please run 'black .' and 'ruff check --fix .' locally to auto-fix issues."

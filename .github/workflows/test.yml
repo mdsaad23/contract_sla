@@ -1,0 +1,47 @@
+name: Pipeline Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Download sample CUAD contracts
+        run: python scripts/download_cuad.py --max 3
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Run pipeline on sample contracts
+        run: python scripts/run_pipeline.py data/cuad_raw --max 3 --timeout 60
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        timeout-minutes: 10
+
+      - name: Verify output files
+        run: |
+          test -f output/results.db && echo "✅ SQLite output created"
+          test -f output/results.json && echo "✅ JSON Lines output created"
+          test -f output/results_summary.csv && echo "✅ CSV output created"
+
+      - name: Check for failed contracts
+        run: |
+          if [ -f output/failed_contracts.json ]; then
+            echo "⚠️ Some contracts failed (see output/failed_contracts.json)"
+          else
+            echo "✅ All contracts processed successfully"
+          fi

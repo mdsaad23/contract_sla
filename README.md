@@ -2,6 +2,11 @@
 
 > Extract Service Level Agreement clauses from thousands of contracts at ~$0.0034 per contract using DeepSeek V3.2, local embeddings on GPU, and a production-grade RAG pipeline.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Cost per contract](https://img.shields.io/badge/Cost-$0.0034-brightgreen.svg)](#2-cost-analysis)
+[![Eval score](https://img.shields.io/badge/Eval-0.790-blue.svg)](#10-evaluation-methodology)
+[![Throughput](https://img.shields.io/badge/Throughput-6--8s%2Fcontract-orange.svg)](#pipeline-performance-optimisation-mid-phase-4)
+
 ---
 
 ## Quick Read (2 minutes)
