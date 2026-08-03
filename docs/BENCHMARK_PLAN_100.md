@@ -1,7 +1,8 @@
 # 100-Contract Random Benchmark: Trimmed Roster + DeepSeek V4 + 32K Context
 
-> Status: **planned, not yet implemented.** Extends the 12-contract benchmark documented in
-> [`LOCAL_MODELS.md`](LOCAL_MODELS.md). Written 2026-08-03.
+> Status: **implemented and executed 2026-08-03.** Extends the 12-contract benchmark documented in
+> [`LOCAL_MODELS.md`](LOCAL_MODELS.md). See [Runbook](#runbook) for how to re-run and monitor it,
+> and [What the plan got wrong](#what-the-plan-got-wrong) for the two corrections measurement forced.
 
 ## Context
 
@@ -235,3 +236,95 @@ Slightly above the earlier 24K estimate: bigger KV means longer prefill, and the
 - [OLLAMA_KV_CACHE_TYPE: halve Ollama's KV cache memory](https://modelpiper.com/blog/ollama-kv-cache-quantization) · [Ollama #13337 — flash attention / KV quant architecture allowlist](https://github.com/ollama/ollama/issues/13337)
 - [Gemma 4 model overview](https://ai.google.dev/gemma/docs/core) · [Qwen3.5 open-weights family — DeepLearning.AI](https://www.deeplearning.ai/the-batch/alibabas-latest-flagship-models-are-open-weights-moe-performers-in-sizes-from-less-than-1b-parameters) · [Qwen3.5-27B thinking cannot be disabled at deploy time](https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/discussions/4) · [Qwen3.6 VRAM table](https://knightli.com/en/2026/05/01/qwen3-6-local-vram-quantization-table/)
 - [FastEmbed supported models](https://github.com/qdrant/fastembed/blob/main/docs/examples/Supported_Models.ipynb) · [all-MiniLM-L6-v2 max_seq_length is 256, trained at 128](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/discussions/54)
+
+---
+
+## Runbook
+
+Two stages. Stage 1 builds the retrieval contexts and the API baseline; stage 2 runs the
+locals and takes hours, so it runs detached and is monitored by tailing its log.
+
+```powershell
+# Stage 1 — contexts + DeepSeek baseline. `--models` with no values means "no local models".
+$env:EMBED_MODEL='BAAI/bge-base-en-v1.5'; $env:CHROMA_DB_PATH='./data/chroma_db_bge'
+python -u scripts/benchmark_models.py --contracts 100 --seed 42 --run-tag bge100 --models
+
+# Stage 2 — the three locals, detached so it survives the terminal that launched it
+Start-Process pwsh -ArgumentList '-NoProfile','-File','scripts/run_bench100.ps1','-Tag','bge100' `
+  -WorkingDirectory (Get-Location).Path -WindowStyle Hidden
+```
+
+Monitoring, from any session on this machine:
+
+```bash
+tail -f output/benchmarks/locals_bge100.log
+```
+
+```bash
+python -c "import json;r=json.load(open('output/benchmarks/results_bge100.json'));[print(f\"{k:<62}{len(b['runs']):>4}/100  avg={sum(x['score'] for x in b['runs'].values())/max(1,len(b['runs'])):.3f}\") for k,b in r.items() if not k.startswith('_')]"
+```
+
+Everything is resumable at contract granularity — `save()` fires after every extraction, and a
+re-run skips any contract already recorded. To force specific contracts to re-run, delete their
+entries from `results_<tag>.json` and re-invoke; nothing else is recomputed.
+
+### Two things worth knowing before changing the run
+
+- **`OLLAMA_KV_CACHE_TYPE` and `OLLAMA_FLASH_ATTENTION` are server settings, not client ones.**
+  Exporting them in the shell that calls the API does nothing to an already-running server.
+  `run_bench100.ps1` restarts the server for the 24B phase for exactly this reason.
+- **`EMBED_MODEL` must match the `--run-tag`.** The harness stores the embedder in `_meta` on
+  first write and shouts if a later invocation disagrees, but it cannot stop you — mixing
+  embedders within one results file makes the comparison meaningless.
+
+---
+
+## What the plan got wrong
+
+Both were caught by measurement, and both are the same class of bug the plan was written to
+avoid: a number that reflects our configuration rather than the model.
+
+**1. The truncation estimate was right about the fix, wrong about the reason.** The plan predicted
+~7% of contracts exceeding 24576 tokens, derived from a 95-chunk x 1,214-char ceiling. Measured at
+4.08 chars/token (empirical, from recorded `prompt_tokens`), the MiniLM context set peaks at
+~23.4K — it would have squeaked under the old window. The bge set peaks at **27,036 tokens**,
+because bge retrieves denser chunks, and that would have been cut. So 32768 was necessary, but
+because of the embedder change, not because MiniLM was already overflowing.
+
+**2. `MAX_TOKENS_PER_CALL = 1500` was silently zeroing ~3% of runs** — a failure mode the plan
+never considered, since the 12-contract sample happened to contain no contract that triggered it.
+Affected extractions returned a JSON object cut off mid-string and scored 0.000. Every failing
+response stopped at exactly 1500 completion tokens; the cause is genuine content, not a runaway
+model, with one contract quoting a 7,642-char arbitration clause verbatim as instructed. Raised to
+4000 (worst observed need ~3.5K); the six affected runs then scored 0.875-1.000. Raising the
+ceiling costs nothing — you pay for tokens generated — and no non-thinking local model in the
+roster has ever exceeded 600 tokens here.
+
+## Verification results
+
+| # | Check | Result |
+|---|---|---|
+| 1 | VRAM probe: mistral IQ4_XS at 32K on the largest contract | **pass** — `100% GPU`, 15 GB, 41/41 layers; server log confirms `--cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on`, so q8_0 KV engaged rather than silently falling back to f16 |
+| 2 | No truncation at 32K | **pass** — largest prompt 27,036 tokens, `num_ctx` 32768 with no halving backoff |
+| 3 | Context histogram | **pass** — bge p100 112,520 chars (~27.6K tokens), under the ~28.8K ceiling the plan predicted |
+| 4 | DeepSeek thinking off | **pass** — 11 completion tokens with the thinking block disabled vs 44 and a populated `reasoning_content` without it |
+| 5 | Sampling random + reproducible | **pass** — seed 42 twice gives an identical 100 stems; seed 43 overlaps on only 20 |
+| 6 | Old artifacts intact | **pass** — `contexts.json`, `results.json`, `BENCHMARK_REPORT.md`, `data/chroma_db/` untouched; new work is `*_bge100.*`, `*_minilm100.*`, `data/chroma_db_bge/`, `data/chroma_db_minilm100/` |
+
+## Embedder A/B result
+
+DeepSeek V4 Pro over the same 100 contracts, once per context set, paired by contract:
+
+| | MiniLM-L6-v2 | bge-base-en-v1.5 |
+|---|---|---|
+| Avg score | 0.7753 | **0.7922** |
+| Contracts >= 0.7 | 73 | **80** |
+| Avg fields populated | 4.49 | **4.63** |
+| Failures | 0 | 0 |
+
+Paired difference **+0.0169** (sd 0.0947, t = 1.79, n = 100). bge wins on all three metrics but
+**t = 1.79 is below the conventional 2.0 bar** — this is directional, not established. It was
+adopted for the local sweep because the direction is consistent across metrics and the mechanism
+is sound (MiniLM is trained at 128 tokens against 512-token chunks), not because the A/B settled
+it. 65 of 100 contracts scored identically under both. Both context sets are retained, so the
+MiniLM arm can be run against the locals later at no retrieval cost.
