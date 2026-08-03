@@ -24,8 +24,12 @@ $log = "output/benchmarks/locals_$Tag.log"
 # KV cache quantization is a *server* setting. Exporting it in this process does
 # nothing to a server that is already running, so the 24B phase restarts one.
 function Restart-Ollama([bool]$KvQuant) {
-  Get-Process -Name 'ollama', 'ollama app' -ErrorAction SilentlyContinue | Stop-Process -Force
-  Start-Sleep -Seconds 3
+  # llama-server holds the VRAM, and force-killing its ollama parent orphans it
+  # rather than reaping it. Miss these and each phase leaks a model's worth of
+  # GPU memory, until the 24B cannot allocate its 11.8 GiB of weights.
+  Get-Process -Name 'ollama', 'ollama app', 'llama-server' -ErrorAction SilentlyContinue |
+    Stop-Process -Force
+  Start-Sleep -Seconds 5
   if ($KvQuant) {
     $env:OLLAMA_FLASH_ATTENTION = '1'
     $env:OLLAMA_KV_CACHE_TYPE   = 'q8_0'
