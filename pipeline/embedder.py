@@ -18,10 +18,9 @@ from llama_index.core.embeddings import BaseEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from fastembed import TextEmbedding
 
-from config import CHROMA_DB_PATH
+from config import CHROMA_DB_PATH, EMBEDDING_MODEL
 
-LOCAL_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-EMBED_DIM = 384
+LOCAL_EMBED_MODEL = EMBEDDING_MODEL
 
 
 def _resolve_providers() -> List[str]:

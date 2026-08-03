@@ -65,6 +65,11 @@ def _call_api(system, user, model, max_tokens, json_mode) -> LLMResponse:
     kwargs = {}
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    # V4 thinks by default at high effort and burns the whole max_tokens budget
+    # on reasoning, returning empty content. reasoning_effort alone does not
+    # switch it off — the thinking block has to be set explicitly.
+    if (model or DEEPSEEK_MODEL).startswith("deepseek-v4"):
+        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     t0 = time.perf_counter()
     resp = client.chat.completions.create(

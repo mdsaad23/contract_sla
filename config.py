@@ -4,10 +4,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_MODEL = "deepseek-chat"
+# deepseek-chat/-reasoner aliases were retired 2026-07-24. V4 Pro thinks by
+# default; pipeline/llm.py disables it explicitly (thinking eats max_tokens).
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # local, free
+# Single source of truth for the embedder — pipeline/embedder.py imports this.
+# Switching it invalidates existing Chroma collections (different dim), so pair
+# it with a fresh CHROMA_DB_PATH.
+EMBEDDING_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 # Local generation via Ollama. num_ctx must exceed our prompt (~900 tokens of
 # schema + 4-6K tokens of retrieved context); Ollama's 4096 default truncates it.
@@ -26,7 +31,7 @@ BATCH_SIZE = 10
 PAUSE_BETWEEN_BATCHES = 2
 MAX_TOKENS_PER_CALL = 1500
 
-CHROMA_DB_PATH = "./data/chroma_db"
+CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
 SQLITE_DB_PATH = "./output/results.db"
 OUTPUT_JSON_PATH = "./output/results.json"
 OUTPUT_CSV_PATH = "./output/results_summary.csv"
