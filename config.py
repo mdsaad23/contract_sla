@@ -29,7 +29,12 @@ LLM_MODEL = os.getenv("LLM_MODEL")  # None -> provider default
 
 BATCH_SIZE = 10
 PAUSE_BETWEEN_BATCHES = 2
-MAX_TOKENS_PER_CALL = 1500
+# 19 fields of verbatim quotes. A few contracts carry multi-thousand-character
+# arbitration and termination clauses; at 1500 they came back as a JSON object
+# cut off mid-string and scored 0.000, measuring this budget rather than the
+# model. Worst observed need is ~3.5K. Raising the ceiling is free — you pay for
+# tokens generated — and no non-thinking local model has exceeded 600 here.
+MAX_TOKENS_PER_CALL = 4000
 
 CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./data/chroma_db")
 SQLITE_DB_PATH = "./output/results.db"
