@@ -38,3 +38,6 @@ class ExtractionResult(BaseModel):
     raw_response: Optional[str] = None
     error: Optional[str] = None
     tokens_used: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    num_ctx: int = 0          # context window the call was given (0 = provider default)

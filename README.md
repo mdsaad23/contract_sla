@@ -67,7 +67,8 @@ python scripts/run_pipeline.py data/cuad_raw --max 10
 8. [Setup & Usage](#8-setup--usage)
 9. [Querying the Results](#9-querying-the-results)
 10. [Evaluation Methodology](#10-evaluation-methodology)
-11. [Design Decisions & Trade-offs](#11-design-decisions--trade-offs)
+11. [Running Fully Local](#11-running-fully-local)
+12. [Design Decisions & Trade-offs](#12-design-decisions--trade-offs)
 
 ---
 
@@ -862,7 +863,46 @@ The remaining gap from 1.0 is concentrated in `dispute_resolution` on 3 contract
 
 ---
 
-## 11. Design Decisions & Trade-offs
+## 11. Running Fully Local
+
+Every step except extraction was already local. The extraction call is a
+config switch:
+
+```bash
+ollama serve
+ollama pull qwen3:14b-q4_K_M
+
+LLM_PROVIDER=ollama LLM_MODEL=qwen3:14b-q4_K_M python scripts/run_pipeline.py
+```
+
+13 models were benchmarked on 12 contracts with the retrieved context cached
+once, so every model sees byte-identical input:
+
+| Model | Eval score | vs DeepSeek | Median latency |
+|---|---|---|---|
+| deepseek-chat (API baseline) | 0.819 | — | 5.6s |
+| qwen3:14b-q4_K_M | **0.807** | −1.5% | 38.4s |
+| llama3.1:8b-instruct-q8_0 | 0.636 | −22.4% | 26.1s |
+| phi4:14b-q4_K_M | 0.626 | −23.6% | 14.4s |
+| mistral:7b-instruct-v0.3-q4_K_M | 0.579 | −29.3% | 10.2s |
+| llama3.2:3b-instruct-q4_K_M | 0.487 | −40.5% | 4.4s |
+| deepseek-r1:8b-llama-distill-q4_K_M | 0.380 | −53.6% | 21.7s |
+
+One local model matches the API within 1.5%, at 6.9× the latency and $0. The
+non-obvious findings — that Ollama silently truncates prompts past `num_ctx`,
+that q8 beats q4 at 8B but *loses* at 3B, that reasoning distills are actively
+worse at fixed-schema extraction, and that constrained JSON decoding doesn't
+help — are in **[docs/LOCAL_MODELS.md](docs/LOCAL_MODELS.md)**, with the full
+13-model table, per-field breakdown, and method.
+
+```bash
+python scripts/benchmark_models.py --list      # installed models
+python scripts/benchmark_models.py --report    # regenerate the report
+```
+
+---
+
+## 12. Design Decisions & Trade-offs
 
 | Decision | Choice | Alternative considered | Reason |
 |----------|--------|----------------------|--------|

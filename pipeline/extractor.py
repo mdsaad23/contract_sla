@@ -1,43 +1,41 @@
 import json
-import os
-from openai import OpenAI
 from dotenv import load_dotenv
 from models.prompts import SYSTEM_PROMPT, EXTRACTION_PROMPT
 from pipeline.schemas import SLAClause, ExtractionResult
-from config import DEEPSEEK_MODEL, DEEPSEEK_BASE_URL, MAX_TOKENS_PER_CALL
+from pipeline.llm import call_llm
+from config import LLM_PROVIDER, LLM_MODEL, MAX_TOKENS_PER_CALL
 
 load_dotenv()
 
 
-def _get_client() -> OpenAI:
-    return OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url=DEEPSEEK_BASE_URL,
-    )
-
-
-def extract_sla(contract_id: str, file_path: str, context: str) -> ExtractionResult:
-    client = _get_client()
-
+def extract_sla(
+    contract_id: str,
+    file_path: str,
+    context: str,
+    provider: str | None = None,
+    model: str | None = None,
+    json_mode: bool = False,
+    num_ctx: int | None = None,
+    max_tokens: int | None = None,
+) -> ExtractionResult:
     prompt = EXTRACTION_PROMPT.format(context=context)
 
     try:
-        response = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            max_tokens=MAX_TOKENS_PER_CALL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+        resp = call_llm(
+            system=SYSTEM_PROMPT,
+            user=prompt,
+            provider=provider or LLM_PROVIDER,
+            model=model or LLM_MODEL,
+            max_tokens=max_tokens or MAX_TOKENS_PER_CALL,
+            json_mode=json_mode,
+            num_ctx=num_ctx,
         )
 
-        raw = response.choices[0].message.content
-        tokens_used = response.usage.total_tokens if response.usage else 0
-
-        data = _parse_json(raw)
+        data = _parse_json(resp.text)
+        data = _coerce(data)
         sla = SLAClause(**data)
 
-        populated = sum(1 for v in data.values() if v is not None)
+        populated = sum(1 for v in sla.model_dump().values() if v is not None)
         status = "success" if populated >= 2 else "partial"
 
         return ExtractionResult(
@@ -45,8 +43,11 @@ def extract_sla(contract_id: str, file_path: str, context: str) -> ExtractionRes
             file_path=file_path,
             status=status,
             sla=sla,
-            raw_response=raw,
-            tokens_used=tokens_used,
+            raw_response=resp.text,
+            tokens_used=resp.prompt_tokens + resp.completion_tokens,
+            prompt_tokens=resp.prompt_tokens,
+            completion_tokens=resp.completion_tokens,
+            num_ctx=resp.num_ctx or num_ctx or 0,
         )
 
     except Exception as e:
@@ -55,12 +56,43 @@ def extract_sla(contract_id: str, file_path: str, context: str) -> ExtractionRes
             file_path=file_path,
             status="failed",
             sla=SLAClause(),
-            error=str(e),
+            error=f"{type(e).__name__}: {e}",
         )
 
 
+def _coerce(data: dict) -> dict:
+    """
+    Smaller local models drift from the schema in predictable ways: they echo the
+    "EXACT QUOTE or null" placeholder, emit the string "null", wrap values in
+    {"value": ...}, or return a list of candidate quotes. Normalise rather than
+    fail — a parse failure and a placeholder answer are different bugs and the
+    benchmark needs to tell them apart.
+    """
+    known = set(SLAClause.model_fields)
+    out = {}
+    for k, v in data.items():
+        if k not in known:
+            continue
+        if isinstance(v, dict):
+            v = v.get("value", next(iter(v.values()), None))
+        if isinstance(v, list):
+            v = next((x for x in v if x), None)
+        if isinstance(v, str):
+            s = v.strip()
+            if (
+                s.lower() in ("null", "none", "n/a", "na", "", "not specified",
+                              "not found", "not mentioned", "not applicable")
+                or s.upper().startswith("EXACT QUOTE")
+            ):
+                v = None
+            else:
+                v = s
+        out[k] = v
+    return out
+
+
 def _parse_json(raw: str) -> dict:
-    raw = raw.strip()
+    raw = (raw or "").strip()
     # Strip markdown fences if model adds them despite instructions
     if raw.startswith("```"):
         lines = raw.split("\n")

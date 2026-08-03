@@ -190,16 +190,19 @@ For legal contracts with explicit clause keywords ("penalty", "liquidated damage
 - Local embeddings eliminate embedding costs entirely
 
 ### For Quality-First Users
-✅ **Swap to Claude Sonnet** (easy 1-line change)
+✅ **Swap to Claude Sonnet or GPT-4o**
 - Slightly higher accuracy on complex clauses
-- Worth 33× cost premium only if extracting $M+ contracts
-- Update `config.py`: `LLM_PROVIDER = "claude"`
+- Worth the 33× cost premium only if extracting $M+ contracts
+- Any OpenAI-compatible endpoint works: set `DEEPSEEK_BASE_URL` + `LLM_MODEL`.
+  Non-compatible providers need a new branch in `pipeline/llm.py:call_llm`.
 
 ### For Privacy-Critical Users
-✅ **Use local LLM** (e.g., Ollama + Mistral)
-- No API calls, no data leaves machine
-- ~5–10× slower than cloud APIs
-- Suitable for small-batch processing
+✅ **Use a local LLM via Ollama** — `LLM_PROVIDER=ollama LLM_MODEL=qwen3:14b-q4_K_M`
+- No API calls, no data leaves the machine, $0 marginal cost
+- Benchmarked at 0.807 vs DeepSeek's 0.819 — a 1.5% quality gap
+- ~6.9× slower (38.4s vs 5.6s per contract) and needs ≥10 GB VRAM
+- Smaller models trade accuracy fast; see [LOCAL_MODELS.md](LOCAL_MODELS.md)
+  for the 13-model comparison
 
 ---
 

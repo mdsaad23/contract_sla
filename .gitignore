@@ -17,7 +17,13 @@ env/
 data/
 # output/ (included per user request)
 Post.txt
+Post_Monday.txt
 Project Critique.md
 *.log
 .DS_Store
 Thumbs.db
+
+# local tool state
+.claude/
+.headroom/
+.tokensave/

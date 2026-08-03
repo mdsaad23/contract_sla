@@ -17,6 +17,7 @@ import sys
 import json
 import sqlite3
 import argparse
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -97,6 +98,7 @@ NON_CONTRACT_MARKERS = [
 
 # ── Source loading ──────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=64)
 def _load_source(file_path: str):
     """Returns (clean_source, ws_source) — two normalisation levels."""
     p = Path(file_path)
