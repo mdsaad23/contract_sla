@@ -277,3 +277,70 @@ you will benchmark truncation instead of the model.
   and queueing that the local models don't pay.
 
 Raw data: `output/benchmarks/results.json`, `summary.json`, `contexts.json`.
+
+---
+
+## 8. The 100-contract run (2026-08-03)
+
+> **These numbers do not belong in the tables above and must not be compared to
+> them.** Different retrieval (bge-base-en-v1.5, not MiniLM), different context
+> window (32768, not 24576), different sample (100 random contracts at seed 42,
+> not 12 evenly-spaced ones), and a different API model (`deepseek-v4-pro`; the
+> `deepseek-chat` alias was retired 2026-07-24). Only the eval is unchanged.
+> Method and rationale: [`BENCHMARK_PLAN_100.md`](BENCHMARK_PLAN_100.md).
+
+| Model | Score | >=0.7 | Fail | Trunc | Fields | Median s |
+|---|---|---|---|---|---|---|
+| `Mistral-Small-24B-Instruct-2501` IQ4_XS | **0.822** | 80/100 | 0 | 0 | 4.9 | 17.8 |
+| `deepseek-v4-pro` (API baseline) | 0.792 | 80/100 | 0 | 0 | 4.6 | 7.7 |
+| `qwen3:14b-q4_K_M` | 0.778 | 82/100 | 0 | 0 | 4.7 | 107.7 |
+| `llama3.1:8b-instruct-q8_0` | 0.750 | 66/100 | 1 | 0 | 4.5 | 8.7 |
+
+All local rows ran at `num_ctx=32768` at 100% GPU with zero truncation and no
+context-halving backoff.
+
+### Read this before quoting the headline
+
+**A local 24B model out-scoring the API baseline is the point estimate, not an
+established result.** The paired difference is +0.030 with a 95% CI of
+**-0.027 to +0.088** (t = 1.04, n = 100). It straddles zero.
+
+Worse for the headline: Mistral **loses to DeepSeek on 53 of 100 contracts and
+wins on 30**. Its higher mean comes from winning bigger where it wins, not from
+winning more often. Both readings are defensible; "the local model is more
+consistent" is the better-supported claim — Mistral has the lowest score
+variance in the table (sd 0.174 vs DeepSeek's 0.306) and never failed to
+produce parseable output.
+
+None of the four gaps here are statistically significant at n=100. The plan's
+"±0.02 noise floor" applies to a single model's mean (SE 0.017-0.031 as
+measured); comparing two models is a paired difference with sd 0.29, so
+separating adjacent rows would need several hundred contracts, not 100.
+
+### What is solid
+
+- **Mistral-Small-24B at IQ4_XS fits 32K context in 15.9 GiB and stays there.**
+  11.8 GiB of weights plus q8_0 KV, 41/41 layers on GPU, verified against the
+  server's own launch flags rather than assumed. Q4_K_M does not fit at 32K.
+- **qwen3:14b is not worth its latency here** — 107.7s median for a score
+  statistically indistinguishable from llama3.1's at 8.7s. The thinking budget
+  is where the time goes.
+- **llama3.1:8b-q8_0 is the value pick**: 0.750 at 8.7s median, within noise of
+  the API baseline's latency, and it was the only model to emit unparseable
+  JSON (once in 100).
+- **Two measurement bugs were fixed en route**, both of which had been quietly
+  depressing scores: a 1500-token output cap that truncated ~3% of extractions
+  mid-JSON, and leaked `llama-server` processes that starved later models of
+  VRAM. See [`BENCHMARK_PLAN_100.md`](BENCHMARK_PLAN_100.md#what-the-plan-got-wrong).
+
+### Embedder
+
+bge-base-en-v1.5 beat MiniLM-L6-v2 on the same 100 contracts and the same API
+model — 0.792 vs 0.775, 80 vs 73 contracts at >=0.7, 4.63 vs 4.49 fields — but
+at t = 1.79 that is directional, not settled, and 65 of 100 contracts scored
+identically. It was adopted for the local sweep on direction plus mechanism
+(MiniLM is trained at 128 tokens against 512-token chunks). The MiniLM context
+set is retained, so that arm can be run against the locals at no retrieval cost.
+
+Raw data: `output/benchmarks/results_bge100.json`, `contexts_bge100.json`,
+`results_minilm100.json`, `contexts_minilm100.json`, and the reports beside them.
