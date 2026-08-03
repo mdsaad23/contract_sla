@@ -2,6 +2,11 @@
 
 Form answers for the SLA Extraction RAG Pipeline demo. Copy/paste each block into the matching form field.
 
+**Update:** slot confirmed for Saturday, August 8, 2026 — **5 minutes**, not
+the 6 assumed below. The run-of-show has been trimmed to fit. For the
+word-for-word delivery script at the confirmed length, see
+[`AI_TINKERERS_TALK_SCRIPT.md`](./AI_TINKERERS_TALK_SCRIPT.md).
+
 ---
 
 ## Your Email
@@ -268,21 +273,24 @@ Honest caveats, if asked:
 
 ---
 
-## Run-of-Show (~6 min)
+## Run-of-Show (~5 min, confirmed slot)
 
 | Time | Beat | On screen |
 |---|---|---|
 | 0:00 | Hook — one dollar seventy-two, 510 contracts | Terminal, cost line from the final run |
-| 0:30 | The problem, in one sentence: penalty clauses locked in PDFs | A contract PDF, scrolled to a buried liquidated-damages clause |
-| 1:00 | **Live run** on that contract, ~6s | `python scripts/run_pipeline.py <contract>` |
-| 1:45 | Lid off the retrieval layer — which query surfaced the clause | Retrieved context block, dedup count |
-| 2:30 | **The eval story** — 0.28, and where the bugs actually were | `evals/eval_runner.py` + the diff |
-| 3:30 | **Same contract, local** — one env var, 9GB model on the GPU | `LLM_PROVIDER=ollama ...`, side-by-side JSON |
-| 4:15 | **The benchmark story** — 13 models, and the num_ctx bug that hid the result | The results table, 0.372 → 0.487 |
-| 5:15 | **The payoff query** — 128 of 510 have real cash penalties | `sqlite3 output/results.db` |
-| 5:45 | Takeaways + repo link | — |
+| 0:25 | The problem, in one sentence: penalty clauses locked in PDFs | A contract PDF, scrolled to a buried liquidated-damages clause |
+| 0:50 | **Live run** on that contract, ~6s | `python scripts/run_pipeline.py <contract>` |
+| 1:30 | **The eval story** — 0.28, and where the bugs actually were | `evals/eval_runner.py` + the diff |
+| 2:15 | **Same contract, local** — one env var, 9GB model on the GPU | `LLM_PROVIDER=ollama ...`, side-by-side JSON |
+| 3:00 | **The benchmark story** — 13 models, and the num_ctx bug that hid the result | One slide: results table, 0.372 → 0.487 |
+| 3:45 | **The payoff query** — 128 of 510 have real cash penalties | `sqlite3 output/results.db` |
+| 4:30 | Takeaways + repo link | — |
 
-Cut for time, in this order: the perf story (double-loaded embedder, 31s → 6s), then the retrieval lid-off. The two measurement stories are the talk.
+At 5 minutes, the retrieval lid-off beat (which query surfaced the clause) is
+cut entirely rather than shortened — the two measurement stories (eval,
+benchmark) are the talk, and the perf story (double-loaded embedder, 31s →
+6s) is Q&A material, not stage material. Full beat-by-beat delivery lines
+are in `AI_TINKERERS_TALK_SCRIPT.md`.
 
 **Backup plan (no venue wifi / DeepSeek API down):** the local run needs no network at all, so the demo survives a dead venue connection — run the Ollama path live and replay a terminal recording for the API leg. Retrieval, eval and SQL are all offline against `output/results.db` regardless.
 
