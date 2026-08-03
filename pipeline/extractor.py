@@ -21,17 +21,7 @@ def extract_sla(
     prompt = EXTRACTION_PROMPT.format(context=context)
 
     try:
-        resp = call_llm(
-            system=SYSTEM_PROMPT,
-            user=prompt,
-            provider=provider or LLM_PROVIDER,
-            model=model or LLM_MODEL,
-            max_tokens=max_tokens or MAX_TOKENS_PER_CALL,
-            json_mode=json_mode,
-            num_ctx=num_ctx,
-        )
-
-        data = _parse_json(resp.text)
+        resp, data = _call_and_parse(prompt, provider, model, max_tokens, json_mode, num_ctx)
         data = _coerce(data)
         sla = SLAClause(**data)
 
@@ -58,6 +48,38 @@ def extract_sla(
             sla=SLAClause(),
             error=f"{type(e).__name__}: {e}",
         )
+
+
+def _call_and_parse(prompt, provider, model, max_tokens, json_mode, num_ctx):
+    """One retry on a JSON parse failure.
+
+    The API occasionally returns a truncated response — the same contract at the
+    same max_tokens and temperature=0 parses cleanly on the next attempt, and the
+    cut lands at a different column each time, so it is transport-side, not the
+    output budget. That costs a 0.000 score for a reason that has nothing to do
+    with the model.
+
+    This is not a thumb on the scale for the API: at temperature=0 a local model
+    returns the same bytes on the retry, so genuinely malformed output from a
+    small model still counts as the failure it is. Only nondeterministic
+    failures get rescued.
+    """
+    last = None
+    for _ in range(2):
+        resp = call_llm(
+            system=SYSTEM_PROMPT,
+            user=prompt,
+            provider=provider or LLM_PROVIDER,
+            model=model or LLM_MODEL,
+            max_tokens=max_tokens or MAX_TOKENS_PER_CALL,
+            json_mode=json_mode,
+            num_ctx=num_ctx,
+        )
+        try:
+            return resp, _parse_json(resp.text)
+        except json.JSONDecodeError as e:
+            last = e
+    raise last
 
 
 def _coerce(data: dict) -> dict:
