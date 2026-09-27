@@ -8,6 +8,8 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 # default; pipeline/llm.py disables it explicitly (thinking eats max_tokens).
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# One key, every hosted model, and usage.cost returns the billed dollars per call.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Single source of truth for the embedder — pipeline/embedder.py imports this.
 # Switching it invalidates existing Chroma collections (different dim), so pair

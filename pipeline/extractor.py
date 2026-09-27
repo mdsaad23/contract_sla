@@ -19,9 +19,11 @@ def extract_sla(
     max_tokens: int | None = None,
 ) -> ExtractionResult:
     prompt = EXTRACTION_PROMPT.format(context=context)
+    cost = 0.0
 
     try:
         resp, data = _call_and_parse(prompt, provider, model, max_tokens, json_mode, num_ctx)
+        cost = resp.cost_usd
         data = _coerce(data)
         sla = SLAClause(**data)
 
@@ -38,6 +40,8 @@ def extract_sla(
             prompt_tokens=resp.prompt_tokens,
             completion_tokens=resp.completion_tokens,
             num_ctx=resp.num_ctx or num_ctx or 0,
+            reasoning_tokens=resp.reasoning_tokens,
+            cost_usd=resp.cost_usd,
         )
 
     except Exception as e:
@@ -47,6 +51,8 @@ def extract_sla(
             status="failed",
             sla=SLAClause(),
             error=f"{type(e).__name__}: {e}",
+            # a failed extraction is still a paid one
+            cost_usd=getattr(e, "cost_usd", cost),
         )
 
 
@@ -65,21 +71,27 @@ def _call_and_parse(prompt, provider, model, max_tokens, json_mode, num_ctx):
     failures get rescued.
     """
     last = None
-    for _ in range(2):
-        resp = call_llm(
-            system=SYSTEM_PROMPT,
-            user=prompt,
-            provider=provider or LLM_PROVIDER,
-            model=model or LLM_MODEL,
-            max_tokens=max_tokens or MAX_TOKENS_PER_CALL,
-            json_mode=json_mode,
-            num_ctx=num_ctx,
-        )
-        try:
-            return resp, _parse_json(resp.text)
-        except json.JSONDecodeError as e:
-            last = e
-    raise last
+    spent = 0.0      # every attempt is billed, including the discarded ones
+    try:
+        for _ in range(2):
+            resp = call_llm(
+                system=SYSTEM_PROMPT,
+                user=prompt,
+                provider=provider or LLM_PROVIDER,
+                model=model or LLM_MODEL,
+                max_tokens=max_tokens or MAX_TOKENS_PER_CALL,
+                json_mode=json_mode,
+                num_ctx=num_ctx,
+            )
+            spent += resp.cost_usd
+            try:
+                return resp._replace(cost_usd=spent), _parse_json(resp.text)
+            except json.JSONDecodeError as e:
+                last = e
+        raise last
+    except Exception as e:
+        e.cost_usd = spent + getattr(e, "cost_usd", 0.0)
+        raise
 
 
 def _coerce(data: dict) -> dict:

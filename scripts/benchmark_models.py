@@ -14,6 +14,10 @@ Usage:
 
   # 100-contract run into its own artifact set (docs/BENCHMARK_PLAN_100.md)
   python scripts/benchmark_models.py --contracts 100 --seed 42 --run-tag bge100
+
+  # Hosted models via OpenRouter on 50 of those 100, capped at $10 billed.
+  # --subset 5 first is a pilot: its contracts are the first 5 of --subset 50.
+  python scripts/benchmark_models.py --contracts 100 --seed 42 --run-tag api50       --subset 50 --budget 10 --openrouter openai/gpt-6-luna anthropic/claude-opus-5.5
 """
 
 import sys
@@ -30,7 +34,7 @@ from pipeline.chunker import chunk_contract
 from pipeline.embedder import build_per_doc_index
 from pipeline.retriever import retrieve_sla_chunks
 from pipeline.extractor import extract_sla
-from pipeline.llm import list_ollama_models
+from pipeline.llm import list_ollama_models, openrouter_usage
 from pipeline.schemas import SLAClause
 from evals.eval_runner import score_extraction
 from config import DEEPSEEK_MODEL, EMBEDDING_MODEL, CHROMA_DB_PATH
@@ -57,6 +61,8 @@ TARGET_NUM_CTX = 32768
 # 1500-token cap they run out mid-thought and return nothing, which measures our
 # budget rather than their ability — so they get a bigger allowance.
 THINKING_MAX_TOKENS = 4000
+# Hosted models all reason, even at low effort, and pay only for what they emit.
+OPENROUTER_MAX_TOKENS = 8000
 
 
 # ── Contract sample ────────────────────────────────────────────────────────────
@@ -106,7 +112,7 @@ def build_contexts(files: list[Path]) -> dict:
 
 def run_model(model_id: str, provider: str, contexts: dict, contract_ids: list[str],
               results: dict, json_mode: bool, num_ctx: int | None = None,
-              thinking: bool = False) -> None:
+              thinking: bool = False, budget: float = 0) -> None:
     key = f"{model_id}|json" if json_mode else model_id
     results.setdefault(key, {"provider": provider, "model": model_id,
                              "json_mode": json_mode, "num_ctx": num_ctx, "runs": {}})
@@ -119,12 +125,16 @@ def run_model(model_id: str, provider: str, contexts: dict, contract_ids: list[s
 
     print(f"\n{'=' * 70}\n{key}  ({provider}){'  [json mode]' if json_mode else ''}\n{'=' * 70}")
     for i, cid in enumerate(pending, 1):
+        if budget and (billed := spent(results)) >= budget:
+            print(f"  BUDGET: ${billed:.2f} of ${budget:.2f} spent, stopping")
+            return
         entry = contexts[cid]
         t0 = time.perf_counter()
         res = extract_sla(cid, entry["file_path"], entry["context"],
                           provider=provider, model=model_id, json_mode=json_mode,
                           num_ctx=num_ctx,
-                          max_tokens=THINKING_MAX_TOKENS if thinking else None)
+                          max_tokens=OPENROUTER_MAX_TOKENS if provider == "openrouter"
+                          else THINKING_MAX_TOKENS if thinking else None)
         wall = time.perf_counter() - t0
 
         row = res.sla.model_dump()
@@ -140,6 +150,8 @@ def run_model(model_id: str, provider: str, contexts: dict, contract_ids: list[s
             "tokens": res.tokens_used,
             "prompt_tokens": res.prompt_tokens,
             "completion_tokens": res.completion_tokens,
+            "reasoning_tokens": res.reasoning_tokens,
+            "cost_usd": res.cost_usd,
             # Ollama silently drops overflow; hitting the ceiling means the
             # contract was clipped, so the score reflects the window not the model
             "truncated": bool(res.num_ctx and res.tokens_used >= res.num_ctx - 8),
@@ -151,9 +163,26 @@ def run_model(model_id: str, provider: str, contexts: dict, contract_ids: list[s
         err = f"  {res.error[:70]}" if res.error else ""
         if runs[cid]["truncated"]:
             err += "  [TRUNCATED]"
+        cost = f"  ${res.cost_usd:.4f}" if res.cost_usd else ""
         print(f"  [{i}/{len(pending)}] {cid}  {flag}  score={ev['overall']:.3f}  "
-              f"fields={populated}/19  {wall:.1f}s{err}")
+              f"fields={populated}/19  {wall:.1f}s{cost}{err}")
         save(results)
+
+
+def captured(results: dict) -> float:
+    return sum(r.get("cost_usd", 0) for k, b in results.items() if not k.startswith("_")
+               for r in b["runs"].values())
+
+
+def spent(results: dict) -> float:
+    """The larger of what the calls reported and what OpenRouter's ledger moved
+    by since the run began. Per-call cost misses billed-but-unanswered calls;
+    the ledger can lag a few seconds behind. Taking the max covers both."""
+    meta = results.get("_meta", {})
+    if "openrouter_usage_start" not in meta:
+        return captured(results)
+    meta["openrouter_billed"] = openrouter_usage() - meta["openrouter_usage_start"]
+    return max(captured(results), meta["openrouter_billed"])
 
 
 def save(results: dict) -> None:
@@ -195,8 +224,20 @@ def summarise(results: dict, contexts: dict) -> list[dict]:
             "avg_tokens": (sum(completion) / len(completion)) if completion else 0,
             "truncated": sum(1 for r in runs.values() if r.get("truncated")),
             "num_ctx": block.get("num_ctx") or 0,
+            "cost": sum(r.get("cost_usd", 0) for r in runs.values()),
+            # tokens over answered calls only; cost above is over every attempt
+            "avg_prompt": _avg(runs, "prompt_tokens"),
+            "avg_completion": _avg(runs, "completion_tokens"),
+            "avg_reasoning": _avg(runs, "reasoning_tokens"),
+            "in_tok": sum(r.get("prompt_tokens", 0) for r in runs.values()),
+            "out_tok": sum(r.get("completion_tokens", 0) for r in runs.values()),
         })
     return sorted(rows, key=lambda r: -r["avg_score"])
+
+
+def _avg(runs: dict, field: str) -> float:
+    answered = [r for r in runs.values() if r.get("prompt_tokens")]
+    return sum(r.get(field, 0) for r in answered) / len(answered) if answered else 0
 
 
 def per_field_table(results: dict) -> dict:
@@ -223,6 +264,9 @@ def main():
     ap.add_argument("--run-tag", default="", help="Suffix for contexts/results/report "
                                                   "(default: overwrite the untagged run)")
     ap.add_argument("--models", nargs="*", help="Specific model ids (default: all local)")
+    ap.add_argument("--openrouter", nargs="+", help="OpenRouter model ids; replaces local + deepseek")
+    ap.add_argument("--subset", type=int, help="Run only the first N of the seeded shuffle")
+    ap.add_argument("--budget", type=float, default=0, help="Stop once this many USD are billed")
     ap.add_argument("--skip-deepseek", action="store_true")
     ap.add_argument("--json-mode", action="store_true", help="Constrained JSON decoding")
     ap.add_argument("--list", action="store_true", help="List local models and exit")
@@ -243,6 +287,11 @@ def main():
         REPORT_PATH = BENCH_DIR / f"BENCHMARK_REPORT_{args.run_tag}.md"
 
     files = pick_contracts(args.contracts, args.seed)
+    if args.subset:
+        # A shuffle, not sample(): prefixes nest, so a --subset 5 pilot is the
+        # first 5 of --subset 50 and its spend is not thrown away.
+        random.Random(args.seed).shuffle(files)
+        files = files[:args.subset]
     contract_ids = [f.stem for f in files]
     results = json.loads(RESULTS_PATH.read_text()) if RESULTS_PATH.exists() else {}
     # setdefault, not assignment: a resumed run keeps the config it actually ran
@@ -252,6 +301,10 @@ def main():
                                         "target_num_ctx": TARGET_NUM_CTX,
                                         "embed_model": EMBEDDING_MODEL,
                                         "chroma_db": CHROMA_DB_PATH})
+    meta["contracts"] = max(meta["contracts"], len(contract_ids))
+    if args.openrouter:
+        # Ledger baseline, set once so a resumed run keeps counting from the pilot.
+        meta.setdefault("openrouter_usage_start", openrouter_usage())
     if meta.get("embed_model") != EMBEDDING_MODEL or meta.get("seed") != args.seed:
         print(f"!! WARNING: {RESULTS_PATH.name} was built with seed={meta.get('seed')} "
               f"embed={meta.get('embed_model')}, now running seed={args.seed} "
@@ -264,7 +317,7 @@ def main():
 
     contexts = build_contexts(files)
 
-    catalog = {m["name"]: m for m in list_ollama_models()}
+    catalog = {} if args.openrouter else {m["name"]: m for m in list_ollama_models()}
     # `--models` with no values means "no local models" (deepseek-only, or with
     # --skip-deepseek, build contexts and stop). Omitting it means "all local".
     local = args.models if args.models is not None else [
@@ -272,6 +325,8 @@ def main():
     targets = [(m, "ollama") for m in local]
     if not args.skip_deepseek:
         targets.append((DEEPSEEK_MODEL, "api"))
+    if args.openrouter:
+        targets = [(m, "openrouter") for m in args.openrouter]
 
     def ctx_for(model_id: str) -> int | None:
         info = catalog.get(model_id)
@@ -287,7 +342,7 @@ def main():
             nc = ctx_for(model_id) if provider == "ollama" else None
             thinking = bool(catalog.get(model_id, {}).get("thinking"))
             run_model(model_id, provider, contexts, contract_ids, results,
-                      args.json_mode, num_ctx=nc, thinking=thinking)
+                      args.json_mode, num_ctx=nc, thinking=thinking, budget=args.budget)
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -302,7 +357,7 @@ def write_report(results: dict, contexts: dict, contract_ids: list[str]) -> None
     rows = summarise(results, contexts)
     fields = per_field_table(results)
 
-    out = ["# Local Model Benchmark — SLA Extraction", ""]
+    out = ["# Model Benchmark — SLA Extraction", ""]
     out.append(f"Contracts: {len(contract_ids)} | identical cached retrieval context per contract")
     meta = results.get("_meta", {})
     if meta:
@@ -334,6 +389,42 @@ def write_report(results: dict, contexts: dict, contract_ids: list[str]) -> None
             d = r["avg_score"] - baseline["avg_score"]
             spd = baseline["median_latency"] / r["median_latency"] if r["median_latency"] else 0
             out.append(f"| `{r['key']}` | {d:+.3f} ({d / baseline['avg_score']:+.0%}) | {spd:.2f}x |")
+        out.append("")
+
+    billed = [r for r in rows if r["cost"]]
+    if billed:
+        out.append("## Cost and tokens per contract")
+        out.append("")
+        total = sum(r["cost"] for r in billed)
+        out.append(f"Captured per call: ${total:.2f}")
+        if "openrouter_usage_start" in meta:
+            spent(results)      # refreshes meta["openrouter_billed"]
+            ledger = meta["openrouter_billed"]
+            out.append(f"OpenRouter ledger since run start: ${ledger:.2f} "
+                       f"(unattributed: ${ledger - total:.2f})")
+        out.append("")
+        out.append("$ / contract counts every attempt, failed ones included.")
+        out.append("")
+        out.append("## Summary")
+        out.append("")
+        out.append("Efficiency is score per 1K tokens per contract (input + output).")
+        out.append("")
+        out.append("| Model | Contracts | Failed | Score | Input tok | Output tok | "
+                   "Efficiency | Tokens / task | $ / task |")
+        out.append("|---|---|---|---|---|---|---|---|---|")
+        for r in billed:
+            per_task = (r["in_tok"] + r["out_tok"]) / r["n"]
+            out.append(f"| `{r['key']}` | {r['n']} | {r['failed']} | {r['avg_score']:.3f} | "
+                       f"{r['in_tok']:,} | {r['out_tok']:,} | "
+                       f"{r['avg_score'] / per_task * 1000:.3f} | {per_task:,.0f} | "
+                       f"${r['cost'] / r['n']:.4f} |")
+        out.append("")
+        out.append("| Model | Score | $ / contract | $ total | Input tok | Output tok | of which reasoning |")
+        out.append("|---|---|---|---|---|---|---|")
+        for r in sorted(billed, key=lambda r: r["cost"]):
+            out.append(f"| `{r['key']}` | {r['avg_score']:.3f} | ${r['cost'] / r['n']:.4f} | "
+                       f"${r['cost']:.2f} | {r['avg_prompt']:,.0f} | {r['avg_completion']:,.0f} | "
+                       f"{r['avg_reasoning']:,.0f} |")
         out.append("")
 
     out.append("## Per-field average score")

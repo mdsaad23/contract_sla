@@ -41,3 +41,5 @@ class ExtractionResult(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     num_ctx: int = 0          # context window the call was given (0 = provider default)
+    reasoning_tokens: int = 0  # subset of completion_tokens (openrouter only)
+    cost_usd: float = 0.0     # billed, summed over retries (openrouter only)

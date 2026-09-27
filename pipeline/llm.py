@@ -1,9 +1,10 @@
 """
 Provider-agnostic chat call.
 
-Two backends:
-  api    — any OpenAI-compatible endpoint (DeepSeek today, others via config)
-  ollama — local models over Ollama's native /api/chat
+Three backends:
+  api        — any OpenAI-compatible endpoint (DeepSeek today, others via config)
+  openrouter — hosted models from every vendor, with billed cost per call
+  ollama     — local models over Ollama's native /api/chat
 
 Ollama gets its own path rather than its OpenAI-compat shim because we need
 `num_ctx`. Ollama's default context is 4096 tokens; our retrieved context runs
@@ -18,7 +19,7 @@ import httpx
 from typing import NamedTuple
 
 from config import (
-    DEEPSEEK_MODEL, DEEPSEEK_BASE_URL, MAX_TOKENS_PER_CALL,
+    DEEPSEEK_MODEL, DEEPSEEK_BASE_URL, OPENROUTER_BASE_URL, MAX_TOKENS_PER_CALL,
     OLLAMA_BASE_URL, OLLAMA_NUM_CTX, OLLAMA_TIMEOUT,
 )
 
@@ -32,6 +33,8 @@ class LLMResponse(NamedTuple):
     latency_s: float
     load_s: float          # ollama only: weight-load time, 0.0 for api
     num_ctx: int = 0       # window actually used (may be below the request after backoff)
+    reasoning_tokens: int = 0   # openrouter only; already inside completion_tokens
+    cost_usd: float = 0.0       # openrouter only; billed, not estimated
 
 
 def strip_reasoning(text: str) -> str:
@@ -51,24 +54,32 @@ def call_llm(
     if provider == "ollama":
         return _call_ollama(system, user, model, max_tokens, json_mode,
                             num_ctx or OLLAMA_NUM_CTX)
-    return _call_api(system, user, model, max_tokens, json_mode)
+    return _call_api(system, user, model, max_tokens, json_mode,
+                     openrouter=provider == "openrouter")
 
 
-def _call_api(system, user, model, max_tokens, json_mode) -> LLMResponse:
+def _call_api(system, user, model, max_tokens, json_mode, openrouter=False) -> LLMResponse:
     import os
     from openai import OpenAI
 
     client = OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
-        base_url=DEEPSEEK_BASE_URL,
+        api_key=os.getenv("OPENROUTER_API_KEY" if openrouter else "DEEPSEEK_API_KEY"),
+        base_url=OPENROUTER_BASE_URL if openrouter else DEEPSEEK_BASE_URL,
     )
     kwargs = {}
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+    if openrouter:
+        # Every model at low effort so the token comparison is like for like.
+        # Opus 5.5 cannot switch thinking off at all; DeepSeek can, and the
+        # existing baseline ran it off, so it stays off here.
+        reasoning = ({"enabled": False} if "deepseek" in model
+                     else {"effort": "low"})
+        kwargs["extra_body"] = {"reasoning": reasoning, "usage": {"include": True}}
     # V4 thinks by default at high effort and burns the whole max_tokens budget
     # on reasoning, returning empty content. reasoning_effort alone does not
     # switch it off — the thinking block has to be set explicitly.
-    if (model or DEEPSEEK_MODEL).startswith("deepseek-v4"):
+    elif (model or DEEPSEEK_MODEL).startswith("deepseek-v4"):
         kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     t0 = time.perf_counter()
@@ -84,14 +95,41 @@ def _call_api(system, user, model, max_tokens, json_mode) -> LLMResponse:
     )
     latency = time.perf_counter() - t0
     usage = resp.usage
+    choice = resp.choices[0]
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning_tokens = (getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+    cost_usd = float(getattr(usage, "cost", 0) or 0)
+    if not choice.message.content and choice.finish_reason == "length":
+        # Same failure as the Ollama thinking models: the budget went on reasoning.
+        # It was still billed, so the cost rides out on the exception.
+        err = RuntimeError(f"reasoning-only response: {reasoning_tokens} reasoning "
+                           f"tokens, no content (max_tokens={max_tokens})")
+        err.cost_usd = cost_usd
+        raise err
     return LLMResponse(
-        text=strip_reasoning(resp.choices[0].message.content),
+        text=strip_reasoning(choice.message.content),
         prompt_tokens=usage.prompt_tokens if usage else 0,
         completion_tokens=usage.completion_tokens if usage else 0,
         latency_s=latency,
         load_s=0.0,
         num_ctx=0,
+        reasoning_tokens=reasoning_tokens,
+        cost_usd=cost_usd,
     )
+
+
+def openrouter_usage() -> float:
+    """Lifetime USD billed to OPENROUTER_API_KEY, as OpenRouter's ledger has it.
+
+    Per-call usage.cost cannot see a call that was billed but never answered
+    (client timeout, dropped connection, the SDK's own silent retries). The
+    ledger can, so the budget and the report reconcile against it.
+    """
+    import os
+    r = httpx.get(f"{OPENROUTER_BASE_URL}/key", timeout=30,
+                  headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"})
+    r.raise_for_status()
+    return float(r.json()["data"]["usage"])
 
 
 def _call_ollama(system, user, model, max_tokens, json_mode, num_ctx) -> LLMResponse:
